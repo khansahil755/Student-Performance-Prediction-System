@@ -1,7 +1,3 @@
-"""
-Columns: attendance, internal, assignment, previous, result
-Rules: High marks -> Pass, Medium -> Average, Low -> Fail
-"""
 import csv
 import random
 

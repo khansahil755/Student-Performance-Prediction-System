@@ -18,14 +18,16 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from src.predict import explain_prediction, predict_result
 from src.utils import get_data_path, get_models_path, validate_input
 
-SKLEARN_IMPORT_ERROR = None
+ML_IMPORT_ERROR = None
+ML_MISSING_MODULE = None
 train_all = None
 
 try:
     import sklearn  # noqa: F401
     from src.train_model import train_all
 except ModuleNotFoundError as exc:
-    SKLEARN_IMPORT_ERROR = exc
+    ML_IMPORT_ERROR = exc
+    ML_MISSING_MODULE = getattr(exc, "name", None)
 
 
 st.set_page_config(
@@ -107,6 +109,24 @@ st.markdown(
             font-weight: 700;
             color: #17324d;
             margin-bottom: 0.75rem;
+        }
+        /* Improve contrast for default Streamlit text on light cards. */
+        .stMarkdown, .stCaption, .stText, .stWrite, p, label, small {
+            color: #1f3448 !important;
+        }
+        /* Slider labels, numeric values, and ticks were too faint. */
+        .stSlider label, .stSlider [data-testid="stTickBar"], .stSlider div[role="slider"] {
+            color: #17324d !important;
+        }
+        .stSlider [data-testid="stThumbValue"] {
+            color: #17324d !important;
+            font-weight: 600 !important;
+        }
+        /* Keep sidebar navigation readable. */
+        section[data-testid="stSidebar"] label,
+        section[data-testid="stSidebar"] .stMarkdown,
+        section[data-testid="stSidebar"] p {
+            color: #e8eef5 !important;
         }
         .result-card {
             border-radius: 16px;
@@ -246,12 +266,32 @@ page = st.sidebar.radio(
 
 
 if page == "Predict":
-    if SKLEARN_IMPORT_ERROR is not None:
+    models_dir = get_models_path()
+    model_path = os.path.join(models_dir, "trained_model.pkl")
+    scaler_path = os.path.join(models_dir, "scaler.pkl")
+    models_ready = os.path.exists(model_path) and os.path.exists(scaler_path)
+
+    if ML_IMPORT_ERROR is not None:
+        missing_module = ML_MISSING_MODULE or "an ML dependency"
         st.error(
-            "Required dependency missing: scikit-learn is not installed in the Python environment "
+            f"Required dependency missing: `{missing_module}` is not available in the Python environment "
             "used to launch Streamlit."
         )
-        st.code("python -m pip install -r requirements.txt")
+        st.code("python -m ensurepip --upgrade\npython -m pip install -r requirements.txt")
+    elif not models_ready:
+        st.warning(
+            "Trained model files were not found. Train the baseline model once before predicting."
+        )
+        if st.button("Train Baseline Model", type="primary", use_container_width=True):
+            with st.spinner("Training baseline model from the default dataset..."):
+                try:
+                    result = train_all(save=True)
+                    st.success(
+                        f"Baseline model trained successfully (Accuracy: {result['lr_accuracy'] * 100:.2f}%)."
+                    )
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Training failed: {exc}")
 
     left_col, right_col = st.columns([1.15, 0.85], gap="large")
 
@@ -286,13 +326,20 @@ if page == "Predict":
             "Predict Result",
             type="primary",
             use_container_width=True,
-            disabled=SKLEARN_IMPORT_ERROR is not None,
+            disabled=ML_IMPORT_ERROR is not None or not models_ready,
         ):
             valid, err = validate_input(attendance, internal, assignment, previous)
             if not valid:
                 st.error(err)
             else:
-                pred, confidence, prob_dict = predict_result(attendance, internal, assignment, previous)
+                try:
+                    pred, confidence, prob_dict = predict_result(
+                        attendance, internal, assignment, previous
+                    )
+                except FileNotFoundError as exc:
+                    st.error(str(exc))
+                    st.stop()
+
                 explanation = explain_prediction(attendance, internal, assignment, previous, pred)
 
                 st.session_state.prediction_history.append(
@@ -367,11 +414,12 @@ elif page == "Dataset Preview":
     st.markdown("</div>", unsafe_allow_html=True)
 
 elif page == "Model Info & Retrain":
-    if SKLEARN_IMPORT_ERROR is not None:
+    if ML_IMPORT_ERROR is not None:
+        missing_module = ML_MISSING_MODULE or "an ML dependency"
         st.error(
-            "Retraining is unavailable because scikit-learn is missing from the active Python environment."
+            f"Retraining is unavailable because `{missing_module}` is missing from the active Python environment."
         )
-        st.code("python -m pip install -r requirements.txt")
+        st.code("python -m ensurepip --upgrade\npython -m pip install -r requirements.txt")
 
     info_col, retrain_col = st.columns([0.9, 1.1], gap="large")
 
@@ -416,7 +464,7 @@ elif page == "Model Info & Retrain":
             else:
                 st.error("CSV must contain: attendance, internal, assignment, previous, result")
 
-        if st.button("Retrain Model", type="primary", disabled=SKLEARN_IMPORT_ERROR is not None):
+        if st.button("Retrain Model", type="primary", disabled=ML_IMPORT_ERROR is not None):
             with st.spinner("Training Logistic Regression and Decision Tree models..."):
                 try:
                     result = train_all(csv_path=csv_path, save=True)
