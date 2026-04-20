@@ -1,7 +1,4 @@
-"""
-Prediction helpers for the Student Performance Prediction System.
-Loads trained models and returns class predictions, confidence, and explanation text.
-"""
+"""Prediction helpers: load model + scaler and predict."""
 
 import os
 import sys
@@ -14,7 +11,7 @@ from src.utils import build_feature_frame, get_models_path, load_model, validate
 
 
 def get_model_and_scaler():
-    """Load the saved model bundle (or legacy model) and scaler from disk."""
+    """Load the trained model and scaler from disk."""
     models_dir = get_models_path()
     model_path = os.path.join(models_dir, "trained_model.pkl")
     scaler_path = os.path.join(models_dir, "scaler.pkl")
@@ -22,53 +19,18 @@ def get_model_and_scaler():
     if not os.path.exists(model_path) or not os.path.exists(scaler_path):
         return None, None
 
-    return load_model(model_path), load_model(scaler_path)
+    model = load_model(model_path)
+    scaler = load_model(scaler_path)
 
+    # Backward compatibility: older versions saved a dict bundle.
+    if isinstance(model, dict) and "primary_model" in model:
+        model = model["primary_model"]
 
-def _extract_models(model_artifact):
-    """Handle both legacy single-model artifacts and new bundled artifacts."""
-    if isinstance(model_artifact, dict) and "primary_model" in model_artifact:
-        primary_model = model_artifact["primary_model"]
-        aux_model = model_artifact.get("aux_model")
-        weights = model_artifact.get("ensemble_weights", {"primary": 0.7, "aux": 0.3})
-        return primary_model, aux_model, weights
-
-    return model_artifact, None, {"primary": 1.0, "aux": 0.0}
-
-
-def _predict_with_probabilities(model, features):
-    """Return (predicted_label, class_labels, probabilities) for one model."""
-    prediction = model.predict(features)[0]
-    if not hasattr(model, "predict_proba"):
-        return prediction, [prediction], [1.0]
-
-    probabilities = model.predict_proba(features)[0]
-    class_labels = list(model.classes_)
-    return prediction, class_labels, probabilities
-
-
-def _blend_probabilities(primary_labels, primary_probs, aux_labels, aux_probs, weights):
-    """Blend two probability distributions into a unified class map."""
-    probability_map = {}
-
-    for label, prob in zip(primary_labels, primary_probs):
-        probability_map[label] = probability_map.get(label, 0.0) + float(prob) * float(weights["primary"])
-
-    for label, prob in zip(aux_labels, aux_probs):
-        probability_map[label] = probability_map.get(label, 0.0) + float(prob) * float(weights["aux"])
-
-    total = sum(probability_map.values())
-    if total > 0:
-        for label in list(probability_map.keys()):
-            probability_map[label] = probability_map[label] / total
-
-    return probability_map
+    return model, scaler
 
 
 def predict_result(attendance, internal, assignment, previous, model=None, scaler=None):
-    """
-    Predict student performance and return (prediction, confidence, probabilities).
-    """
+    """Return (prediction, confidence, probability_map)."""
     valid, error_message = validate_input(attendance, internal, assignment, previous)
     if not valid:
         raise ValueError(error_message)
@@ -78,33 +40,28 @@ def predict_result(attendance, internal, assignment, previous, model=None, scale
 
     if model is None or scaler is None:
         raise FileNotFoundError(
-            "Saved model artifacts are missing. Retrain the model from 'Model Info & Retrain' first."
+            "Saved model artifacts are missing. Train the model first."
         )
 
     feature_frame = build_feature_frame(attendance, internal, assignment, previous)
-    transformed = scaler.transform(feature_frame) if scaler is not None else feature_frame
+    transformed = scaler.transform(feature_frame)
 
-    primary_model, aux_model, weights = _extract_models(model)
-    _, primary_labels, primary_probs = _predict_with_probabilities(primary_model, transformed)
+    prediction = model.predict(transformed)[0]
 
-    if aux_model is not None:
-        _, aux_labels, aux_probs = _predict_with_probabilities(aux_model, feature_frame)
-        merged = _blend_probabilities(primary_labels, primary_probs, aux_labels, aux_probs, weights)
+    if hasattr(model, "predict_proba"):
+        probs = model.predict_proba(transformed)[0]
+        labels = list(model.classes_)
+        probability_map = {label: round(float(prob), 4) for label, prob in zip(labels, probs)}
+        confidence = max(probability_map.values()) if probability_map else 0.0
     else:
-        merged = {label: float(prob) for label, prob in zip(primary_labels, primary_probs)}
+        probability_map = {prediction: 1.0}
+        confidence = 1.0
 
-    sorted_items = sorted(merged.items(), key=lambda item: item[1], reverse=True)
-    prediction = sorted_items[0][0]
-    confidence = sorted_items[0][1]
-
-    probability_map = {label: round(float(prob), 4) for label, prob in sorted_items}
     return prediction, confidence, probability_map
 
 
-def explain_prediction(attendance, internal, assignment, previous, prediction, model=None):
-    """
-    Generate a short viva-friendly explanation using the strongest visible factors.
-    """
+def explain_prediction(attendance, internal, assignment, previous, prediction, _model=None):
+    """Short explanation from the four input scores."""
     if prediction not in {"Pass", "Average", "Fail"}:
         return "Prediction is unavailable until a trained model is loaded."
     scores = {

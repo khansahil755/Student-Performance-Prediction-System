@@ -67,12 +67,14 @@ class TestPredict:
         assert pred in ("Pass", "Average", "Fail")
         assert 0 <= confidence <= 1
         assert isinstance(prob_dict, dict)
-        assert "Pass" in prob_dict or "Average" in prob_dict or "Fail" in prob_dict
+        assert any(label in prob_dict for label in ("Pass", "Average", "Fail"))
+        assert abs(sum(float(v) for v in prob_dict.values()) - 1.0) < 0.01
 
     def test_explain_prediction_returns_string(self):
         explanation = explain_prediction(55, 10, 8, 40, "Fail")
         assert isinstance(explanation, str)
-        assert "👉" in explanation or "Fail" in explanation or "Low" in explanation
+        assert len(explanation) > 5
+        assert "fail" in explanation.lower() or "predict" in explanation.lower()
 
 
 class TestLoadDataset:

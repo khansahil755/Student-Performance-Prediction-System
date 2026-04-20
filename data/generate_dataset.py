@@ -1,7 +1,11 @@
 import csv
+import os
 import random
 
 random.seed(42)
+
+out_dir = os.path.dirname(os.path.abspath(__file__))
+out_path = os.path.join(out_dir, "student_data.csv")
 rows = []
 
 for _ in range(120):
@@ -18,8 +22,8 @@ for _ in range(120):
         result = "Fail"
     rows.append([attendance, internal, assignment, previous, result])
 
-with open("student_data.csv", "w", newline="") as f:
+with open(out_path, "w", newline="") as f:
     w = csv.writer(f)
     w.writerow(["attendance", "internal", "assignment", "previous", "result"])
     w.writerows(rows)
-print("Generated student_data.csv with", len(rows), "rows")
+print("Wrote", out_path, "with", len(rows), "rows")
